@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Juego Abrir Cajas</title>
 <style>
-/* Estilo moderno */
 :root { --bg:#0f1724; --card:#0b1220; --accent:#7c3aed; --muted:#9aa4b2; --glass:rgba(255,255,255,0.04); }
 * { box-sizing:border-box; font-family: Inter, system-ui, sans-serif; }
 body { margin:0; background: var(--bg); color:#e6eef8; }
@@ -74,7 +73,7 @@ small { color:var(--muted); }
 <section id="adminSection" class="hidden">
 <h3>Admin Panel (cracky)</h3>
 <div class="admin-panel">
-<!-- Panel items, cajas y códigos -->
+<!-- Aquí se agregan cajas, items y códigos -->
 </div>
 </section>
 </div>
@@ -83,6 +82,7 @@ small { color:var(--muted); }
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js';
 import { getFirestore, collection, getDocs, addDoc, doc, setDoc, getDoc, updateDoc, query, where, deleteDoc } from 'https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore.js';
+
 const firebaseConfig = {
 apiKey: "AIzaSyBwj_as6pb5Bg81F9Cl9VWTKkekMM9Exfk",
 authDomain: "pekora-forum.firebaseapp.com",
@@ -92,18 +92,91 @@ messagingSenderId: "161910967859",
 appId: "1:161910967859:web:6a28cecaae74b9b7e9dd46",
 measurementId: "G-BPBTW5KBRK"
 };
+
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const $ = id=>document.getElementById(id);
 let currentUser = null;
 const SESSION_KEY = 'boxgame_user_v1';
 const ADMIN_PASSWORD = 'cracky1010';
+
 const authSection=$('authSection'),usernameInput=$('username'),passwordInput=$('password'),registerBtn=$('registerBtn'),loginBtn=$('loginBtn'),userCoinsEl=$('userCoins'),authButtons=$('authButtons'),boxesEl=$('boxes'),invUser=$('invUser'),redeemInput=$('redeemCode'),redeemBtn=$('redeemBtn'),redeemResult=$('redeemResult'),adminSection=$('adminSection');
-function logoutUser(){localStorage.removeItem(SESSION_KEY);currentUser=null;authSection.classList.remove('hidden');authButtons.innerHTML='';userCoinsEl.textContent='Invitado';invUser.innerHTML='Inicia sesión para ver inventario.';adminSection.classList.add('hidden');}
-async function findUserByUsername(username){const ref=doc(db,'users',username);const snap=await getDoc(ref);return snap.exists()?{id:snap.id,...snap.data()}:null;}
-registerBtn.onclick=async()=>{const username=usernameInput.value.trim(),password=passwordInput.value;if(!username||!password){alert('Usuario y contraseña requeridos');return;}const exists=await findUserByUsername(username);if(exists){alert('Usuario ya existe');return;}const isAdmin=username.toLowerCase()==='cracky';await setDoc(doc(db,'users',username),{username,password,coins:100,inventory:[],isAdmin});currentUser={id:username,username,isAdmin};localStorage.setItem(SESSION_KEY,JSON.stringify(currentUser));authSection.classList.add('hidden');await refreshUserUI();alert('Registrado con 100 monedas');};
-loginBtn.onclick=async()=>{const username=usernameInput.value.trim(),password=passwordInput.value;if(!username||!password){alert('Usuario y contraseña requeridos');return;}const u=await findUserByUsername(username);if(!u){alert('Usuario no encontrado');return;}if(u.password!==password){alert('Contraseña incorrecta');return;}currentUser={id:username,username,isAdmin:!!u.isAdmin};localStorage.setItem(SESSION_KEY,JSON.stringify(currentUser));authSection.classList.add('hidden');await refreshUserUI();alert('Sesión iniciada');};
-async function refreshUserUI(){if(!currentUser){userCoinsEl.textContent='Invitado';invUser.innerHTML='Inicia sesión para ver inventario.';adminSection.classList.add('hidden');return;}const uSnap=await getDoc(doc(db,'users',currentUser.id));if(!uSnap.exists()){logoutUser();return;}const u=uSnap.data();userCoinsEl.textContent=`${u.username} — ${u.coins||0} 💰`;authButtons.innerHTML=`<button id="logoutBtn">Cerrar sesión</button>`;document.getElementById('logoutBtn').onclick=()=>logoutUser();invUser.innerHTML='';const itemsAll=await getDocs(collection(db,'items'));let inv=u.inventory||[];if(inv.length===0)invUser.innerHTML='<small>Inventario vacío</small>';for(const slot of inv.slice().reverse()){let it=itemsAll.docs.find(i=>i.id===slot.itemId);const card=document.createElement('div');card.className='inv-card';card.innerHTML=`<div style="height:72px">${it?`<img src="${it.data().img}" style="max-width:100%;max-height:100%;border-radius:6px">`:'No img'}</div><div style="margin-top:6px"><strong>${it?it.data().name:slot.itemId}</strong></div>`;invUser.appendChild(card);}if(u.isAdmin){adminSection.classList.remove('hidden');}}window.logoutUser=logoutUser;
+
+function logoutUser(){
+ localStorage.removeItem(SESSION_KEY);
+ currentUser=null;
+ authSection.classList.remove('hidden');
+ authButtons.innerHTML='';
+ userCoinsEl.textContent='Invitado';
+ invUser.innerHTML='Inicia sesión para ver inventario.';
+ adminSection.classList.add('hidden');
+}
+
+async function findUserByUsername(username){
+ const ref=doc(db,'users',username);
+ const snap=await getDoc(ref);
+ return snap.exists()?{id:snap.id,...snap.data()}:null;
+}
+
+registerBtn.onclick=async()=>{
+ const username=usernameInput.value.trim(),password=passwordInput.value;
+ if(!username||!password){alert('Usuario y contraseña requeridos');return;}
+ const exists=await findUserByUsername(username);
+ if(exists){alert('Usuario ya existe');return;}
+ const isAdmin=username.toLowerCase()==='cracky';
+ await setDoc(doc(db,'users',username),{username,password,coins:100,inventory:[],isAdmin});
+ currentUser={id:username,username,isAdmin};
+ localStorage.setItem(SESSION_KEY,JSON.stringify(currentUser));
+ authSection.classList.add('hidden');
+ await refreshUserUI();
+ alert('Registrado con 100 monedas');
+};
+
+loginBtn.onclick=async()=>{
+ const username=usernameInput.value.trim(),password=passwordInput.value;
+ if(!username||!password){alert('Usuario y contraseña requeridos');return;}
+ const u=await findUserByUsername(username);
+ if(!u){alert('Usuario no encontrado');return;}
+ if(u.password!==password){alert('Contraseña incorrecta');return;}
+ currentUser={id:username,username,isAdmin:!!u.isAdmin};
+ localStorage.setItem(SESSION_KEY,JSON.stringify(currentUser));
+ authSection.classList.add('hidden');
+ await refreshUserUI();
+ alert('Sesión iniciada');
+};
+
+async function refreshUserUI(){
+ if(!currentUser){userCoinsEl.textContent='Invitado';invUser.innerHTML='Inicia sesión para ver inventario.';adminSection.classList.add('hidden');return;}
+ const uSnap=await getDoc(doc(db,'users',currentUser.id));
+ if(!uSnap.exists()){logoutUser();return;}
+ const u=uSnap.data();
+ userCoinsEl.textContent=`${u.username} — ${u.coins||0} 💰`;
+ authButtons.innerHTML=`<button id="logoutBtn">Cerrar sesión</button>`;
+ document.getElementById('logoutBtn').onclick=()=>logoutUser();
+ invUser.innerHTML='';
+ const itemsAll=await getDocs(collection(db,'items'));
+ let inv=u.inventory||[];
+ if(inv.length===0)invUser.innerHTML='<small>Inventario vacío</small>';
+ for(const slot of inv.slice().reverse()){
+  let it=itemsAll.docs.find(i=>i.id===slot.itemId);
+  const card=document.createElement('div');
+  card.className='inv-card';
+  card.innerHTML=`<div style="height:72px">${it?`<img src="${it.data().img}" style="max-width:100%;max-height:100%;border-radius:6px">`:'No img'}</div><div style="margin-top:6px"><strong>${it?it.data().name:slot.itemId}</strong></div>`;
+  invUser.appendChild(card);
+ }
+ if(u.isAdmin){adminSection.classList.remove('hidden');}
+}
+
+// Cargar sesión persistente
+window.addEventListener('DOMContentLoaded',()=>{
+ const stored=localStorage.getItem(SESSION_KEY);
+ if(stored){currentUser=JSON.parse(stored);authSection.classList.add('hidden');refreshUserUI();}
+});
+
+// Admin Panel apertura con Insert + contraseña
+window.addEventListener('keydown',async e=>{
+ if(e.key==='Insert'){ const pass=prompt('Contraseña admin'); if(pass===ADMIN_PASSWORD){adminSection.classList.remove('hidden');alert('Admin panel abierto');}else{alert('Contraseña incorrecta');}}
+});
 </script>
 </body>
 </html>
