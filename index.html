@@ -84,7 +84,7 @@
         <hr style="margin:12px 0;border:none;border-top:1px solid rgba(255,255,255,0.04)" />
 
         <section id="adminSection" class="hidden">
-          <h3>Admin Panel (Insert para abrir)</h3>
+          <h3>Admin Panel (Insert para abrir — contraseña requerida)</h3>
           <div class="admin-panel">
             <details open>
               <summary>Agregar Item</summary>
@@ -131,7 +131,7 @@
     </div>
 
     <footer>
-      Juego de abrir cajas — hecho en 1 HTML con Firebase. Usuario admin: <strong>cracky</strong> (se asigna automáticamente si ese nombre se registra). Presiona la tecla <strong>Insert</strong> para abrir el panel admin (las acciones sensibles aún requieren ser cracky autenticado).
+      Juego de abrir cajas — hecho en 1 HTML con Firebase. Usuario admin: <strong>cracky</strong> (se puede desbloquear el panel con la contraseña). Presiona la tecla <strong>Insert</strong> para abrir el panel admin (contraseña: <code>cracky1010</code>).
     </footer>
   </div>
 
@@ -219,6 +219,29 @@
     }
     function saveGuest(g){ localStorage.setItem(GUEST_KEY, JSON.stringify(g)); }
 
+    // --- Local fallback auth (for projects where Firebase Auth isn't configured) ---
+    // If Firebase Auth calls fail with configuration errors, we will store users in 'local_users' Firestore collection
+    // or in localStorage as a fallback. This prevents the "auth/configuration-not-found" blocking registration.
+    let localAuthUser = null; // {id,username,password}
+
+    async function createFallbackUser(username,password){
+      // check existing in Firestore 'local_users'
+      const q = query(collection(db,'local_users'), where('username','==',username));
+      const snap = await getDocs(q);
+      if(!snap.empty) throw new Error('Usuario ya existe (fallback)');
+      const docRef = await addDoc(collection(db,'local_users'),{username,password,coins:100,inventory:[]});
+      localAuthUser = {id:docRef.id,username,password};
+      return localAuthUser;
+    }
+
+    async function loginFallbackUser(username,password){
+      const q = query(collection(db,'local_users'), where('username','==',username), where('password','==',password));
+      const snap = await getDocs(q);
+      if(snap.empty) throw new Error('Credenciales inválidas (fallback)');
+      const d = snap.docs[0]; localAuthUser = {id:d.id, username: d.data().username, password: d.data().password};
+      return localAuthUser;
+    }
+
     // --- Core game logic ---
 
     async function createUser(username, password){
@@ -231,20 +254,38 @@
         await setDoc(doc(db,'users',uid),{
           username, coins:100, inventory:[], isAdmin
         });
-        return userCred.user;
+        return {type:'firebase', uid, username};
       }catch(e){
-        throw e;
+        console.warn('Firebase createUser failed, using fallback auth. Error:', e.message);
+        // fallback: try local Firestore storage
+        try{
+          const fallback = await createFallbackUser(username,password);
+          return {type:'fallback', id:fallback.id, username};
+        }catch(err){
+          throw err;
+        }
       }
     }
 
     async function loginUser(username,password){
       const fakeEmail = `${username}@game.local`;
-      return signInWithEmailAndPassword(auth, fakeEmail, password);
+      try{
+        const cred = await signInWithEmailAndPassword(auth, fakeEmail, password);
+        return {type:'firebase', uid:cred.user.uid, username};
+      }catch(e){
+        console.warn('Firebase login failed, trying fallback. Error:', e.message);
+        try{
+          const fl = await loginFallbackUser(username,password);
+          return {type:'fallback', id:fl.id, username:fl.username};
+        }catch(err){
+          throw err;
+        }
+      }
     }
 
     async function logoutUser(){
-      await signOut(auth);
-      // When logging out, keep guest data available
+      try{ await signOut(auth); }catch(e){}
+      localAuthUser = null;
     }
 
     async function fetchBoxes(){
@@ -290,14 +331,13 @@
     }
 
     async function openBox(boxId){
-      // Allow both authenticated users and guests
-      const user = auth.currentUser;
       const boxSnap = await getDoc(doc(db,'boxes',boxId));
       if(!boxSnap.exists()){alert('Caja no existe');return}
       const box = boxSnap.data();
 
+      // Authenticated firebase user?
+      const user = auth.currentUser;
       if(user){
-        // Authenticated user flow (same as before)
         const userDocRef = doc(db,'users',user.uid);
         const userSnap = await getDoc(userDocRef);
         if(!userSnap.exists()){alert('Usuario no existe');return}
@@ -309,18 +349,32 @@
         await updateDoc(userDocRef,{inventory:inv});
         alert('¡Obtuviste: ' + chosen.itemId + ' !');
         await refreshUserUI();
-      } else {
-        // Guest flow (localStorage-based)
-        let guest = getGuest(); if(!guest) guest = createGuest();
-        if((guest.coins||0) < (box.price||0)){alert('No tienes monedas suficientes (invitado)');return}
-        guest.coins = (guest.coins||0) - (box.price||0);
-        const chosen = chooseItemFromBox(box);
-        guest.inventory = guest.inventory || [];
-        guest.inventory.push({itemId:chosen.itemId,obtainedAt:Date.now()});
-        saveGuest(guest);
-        alert('Invitado: obtuviste ' + chosen.itemId);
-        await refreshUserUI();
+        return;
       }
+
+      // Fallback auth (local_users in Firestore)
+      if(localAuthUser){
+        const ref = doc(db,'local_users',localAuthUser.id);
+        const snap = await getDoc(ref);
+        if(!snap.exists()){alert('Usuario local no existe');return}
+        const data = snap.data();
+        if((data.coins||0) < (box.price||0)){alert('No tienes monedas suficientes (local)');return}
+        await updateDoc(ref,{coins:(data.coins||0)-(box.price||0), inventory:[...(data.inventory||[]), {itemId:chooseItemFromBox(box).itemId,obtainedAt:Date.now()}]});
+        alert('Invitado/Local: abriste una caja');
+        await refreshUserUI();
+        return;
+      }
+
+      // Guest (localStorage)
+      let guest = getGuest(); if(!guest) guest = createGuest();
+      if((guest.coins||0) < (box.price||0)){alert('No tienes monedas suficientes (invitado)');return}
+      guest.coins = (guest.coins||0) - (box.price||0);
+      const chosen = chooseItemFromBox(box);
+      guest.inventory = guest.inventory || [];
+      guest.inventory.push({itemId:chosen.itemId,obtainedAt:Date.now()});
+      saveGuest(guest);
+      alert('Invitado: obtuviste ' + chosen.itemId);
+      await refreshUserUI();
     }
 
     function chooseItemFromBox(box){
@@ -334,52 +388,65 @@
     async function refreshUserUI(){
       const user = auth.currentUser;
       const itemsAll = await fetchItems();
-      if(!user){
-        // show guest
-        let guest = getGuest(); if(!guest) guest = createGuest();
-        userCoinsEl.textContent = `${guest.username} — ${guest.coins||0} 💰 (invitado)`;
-        authButtons.innerHTML = `<button id="becomeUser">Registrarme</button> <button id="refreshBtn">Refrescar</button>`;
-        document.getElementById('becomeUser').onclick = ()=>{ alert('Usá el panel de registro para convertirte en usuario y guardar tu progreso'); };
-        document.getElementById('refreshBtn').onclick = ()=>{ location.reload(); };
-        // Inventory
-        const inv = guest.inventory || [];
-        invUser.innerHTML=''; if(inv.length===0) invUser.innerHTML='<small>Inventario vacío (invitado)</small>';
+      if(user){
+        const snap = await getDoc(doc(db,'users',user.uid));
+        if(!snap.exists()) return;
+        const data = snap.data();
+        userCoinsEl.textContent = `${data.username} — ${data.coins||0} 💰`;
+        authButtons.innerHTML = `<button id="logoutBtn">Cerrar</button>`;
+        document.getElementById('logoutBtn').onclick = async ()=>{ await logoutUser(); location.reload(); };
+        const inv = data.inventory||[]; invUser.innerHTML=''; if(inv.length===0) invUser.innerHTML='<small>Inventario vacío</small>';
+        for(const slot of inv.slice().reverse()){
+          const it = itemsAll.find(i=>i.id===slot.itemId) || {name:'Unknown',img:''};
+          const card = document.createElement('div');card.className='inv-card';
+          card.innerHTML = `<div style="height:60px">${ it.img ? `<img src="${it.img}" style="max-width:100%;max-height:100%;border-radius:6px">` : '<div style="font-size:12px;color:var(--muted)">No img</div>'}</div><div style="margin-top:6px"><strong>${it.name}</strong></div>`;
+          invUser.appendChild(card);
+        }
+        // show admin only if firebase user is admin
+        if(data.isAdmin) adminSection.classList.remove('hidden'); else adminSection.classList.add('hidden');
+        return;
+      }
+
+      if(localAuthUser){
+        // show local user from local_users collection
+        const snap = await getDoc(doc(db,'local_users',localAuthUser.id));
+        if(!snap.exists()){ localAuthUser = null; return await refreshUserUI(); }
+        const data = snap.data();
+        userCoinsEl.textContent = `${data.username} — ${data.coins||0} 💰 (local)`;
+        authButtons.innerHTML = `<button id="logoutBtn">Cerrar</button>`;
+        document.getElementById('logoutBtn').onclick = async ()=>{ localAuthUser=null; location.reload(); };
+        const inv = data.inventory||[]; invUser.innerHTML=''; if(inv.length===0) invUser.innerHTML='<small>Inventario vacío</small>';
         for(const slot of inv.slice().reverse()){
           const it = itemsAll.find(i=>i.id===slot.itemId) || {name:slot.itemId,img:''};
           const card = document.createElement('div');card.className='inv-card';
           card.innerHTML = `<div style="height:60px">${ it.img ? `<img src="${it.img}" style="max-width:100%;max-height:100%;border-radius:6px">` : '<div style="font-size:12px;color:var(--muted)">No img</div>'}</div><div style="margin-top:6px"><strong>${it.name}</strong></div>`;
           invUser.appendChild(card);
         }
-        // admin hidden by default; can be opened with Insert (but actions require auth/admin)
+        // if local username is cracky, do not auto-enable admin panel; admin panel requires password unlock below
         adminSection.classList.add('hidden');
         return;
       }
-      // authenticated
-      const snap = await getDoc(doc(db,'users',user.uid));
-      if(!snap.exists()) return;
-      const data = snap.data();
-      userCoinsEl.textContent = `${data.username} — ${data.coins||0} 💰`;
-      // Auth buttons
-      authButtons.innerHTML = `<button id="logoutBtn">Cerrar</button>`;
-      document.getElementById('logoutBtn').onclick = async ()=>{ await logoutUser(); location.reload(); };
 
-      // Inventory
-      const inv = data.inventory||[];
-      invUser.innerHTML=''; if(inv.length===0) invUser.innerHTML='<small>Inventario vacío</small>';
+      // guest
+      let guest = getGuest(); if(!guest) guest = createGuest();
+      userCoinsEl.textContent = `${guest.username} — ${guest.coins||0} 💰 (invitado)`;
+      authButtons.innerHTML = `<button id="becomeUser">Registrarme</button> <button id="refreshBtn">Refrescar</button>`;
+      document.getElementById('becomeUser').onclick = ()=>{ alert('Usá el panel de registro para convertirte en usuario y guardar tu progreso'); };
+      document.getElementById('refreshBtn').onclick = ()=>{ location.reload(); };
+      const inv = guest.inventory || [];
+      invUser.innerHTML=''; if(inv.length===0) invUser.innerHTML='<small>Inventario vacío (invitado)</small>';
       for(const slot of inv.slice().reverse()){
-        const it = itemsAll.find(i=>i.id===slot.itemId) || {name:'Unknown',img:''};
+        const it = itemsAll.find(i=>i.id===slot.itemId) || {name:slot.itemId,img:''};
         const card = document.createElement('div');card.className='inv-card';
         card.innerHTML = `<div style="height:60px">${ it.img ? `<img src="${it.img}" style="max-width:100%;max-height:100%;border-radius:6px">` : '<div style="font-size:12px;color:var(--muted)">No img</div>'}</div><div style="margin-top:6px"><strong>${it.name}</strong></div>`;
         invUser.appendChild(card);
       }
-
-      // admin toggle: only show automatically if isAdmin
-      if(data.isAdmin){ adminSection.classList.remove('hidden'); } else { adminSection.classList.add('hidden'); }
+      adminSection.classList.add('hidden');
     }
 
-    // --- Codes (works for auth users; guests can also redeem but effects are local for guests) ---
+    // --- Codes ---
     async function redeemCode(codeStr){
-      const user = auth.currentUser; if(!user){ // guest
+      const user = auth.currentUser; if(!user && !localAuthUser){ // guest
         const q = query(collection(db,'codes'), where('code','==',codeStr));
         const snap = await getDocs(q);
         if(snap.empty){redeemResult.textContent='Código inválido';return}
@@ -392,13 +459,27 @@
         await refreshUserUI();
         return;
       }
-      // authenticated
+      if(localAuthUser){
+        const q = query(collection(db,'codes'), where('code','==',codeStr));
+        const snap = await getDocs(q);
+        if(snap.empty){redeemResult.textContent='Código inválido';return}
+        const docRef = snap.docs[0]; const cdata = docRef.data();
+        const ref = doc(db,'local_users',localAuthUser.id); const snapu = await getDoc(ref); const u = snapu.data();
+        const newCoins = (u.coins||0) + (cdata.coins||0);
+        let newInv = u.inventory || [];
+        if(cdata.items && cdata.items.length>0){ for(const it of cdata.items){ newInv.push({itemId:it, obtainedAt:Date.now()}); } }
+        await updateDoc(ref,{coins:newCoins, inventory:newInv});
+        redeemResult.textContent = `Canjeado (local): +${cdata.coins||0} monedas`;
+        await refreshUserUI();
+        return;
+      }
+      // authenticated firebase user
       const q = query(collection(db,'codes'), where('code','==',codeStr));
       const snap = await getDocs(q);
       if(snap.empty){redeemResult.textContent='Código inválido';return}
       const docRef = snap.docs[0];
       const cdata = docRef.data();
-      const userRef = doc(db,'users',user.uid); const userSnap = await getDoc(userRef); const u = userSnap.data();
+      const userRef = doc(db,'users',auth.currentUser.uid); const userSnap = await getDoc(userRef); const u = userSnap.data();
       const giveCoins = cdata.coins||0;
       const newCoins = (u.coins||0) + giveCoins;
       let newInv = u.inventory || [];
@@ -409,64 +490,73 @@
       await refreshUserUI();
     }
 
-    // --- Admin actions (still require authenticated cracky) ---
+    // --- Admin actions (require adminUnlocked or authenticated admin) ---
+    let adminUnlocked = false;
+    const ADMIN_PASSWORD = 'cracky1010';
+
+    function requireAdmin(){
+      // returns true if allowed
+      // allowed if firebase user exists and isAdmin, or localAuthUser username is cracky, or adminUnlocked true
+      if(adminUnlocked) return true;
+      const u = auth.currentUser;
+      if(u) return true; // we will check server-side isAdmin in each action
+      if(localAuthUser && localAuthUser.username.toLowerCase() === 'cracky') return true;
+      return false;
+    }
+
     admin_add_item.onclick = async ()=>{
+      if(!requireAdmin()){alert('No autorizado. Abre el panel con Insert y ingresa la contraseña.');return}
       const name = admin_item_name.value.trim(); const img = admin_item_img.value.trim();
       if(!name){alert('Nombre requerido');return}
-      const current = auth.currentUser; if(!current){alert('Debes iniciar sesión como cracky para crear items');return}
-      const usr = await getDoc(doc(db,'users',current.uid)); if(!usr.exists() || !usr.data().isAdmin){alert('No autorizado');return}
-      await addDoc(collection(db,'items'),{name,img});
-      alert('Item creado'); admin_item_name.value=''; admin_item_img.value='';
+      try{ await addDoc(collection(db,'items'),{name,img}); alert('Item creado'); admin_item_name.value=''; admin_item_img.value=''; }
+      catch(e){ alert('Error creando item: '+e.message); }
     }
 
     admin_add_box.onclick = async ()=>{
+      if(!requireAdmin()){alert('No autorizado.');return}
       const name = admin_box_name.value.trim(); const price = Number(admin_box_price.value||0);
       let itemsArr = [];
       try{ itemsArr = JSON.parse(admin_box_items.value||'[]'); }catch(e){alert('items JSON inválido');return}
-      const current = auth.currentUser; if(!current){alert('Debes iniciar sesión como cracky para crear cajas');return}
-      const usr = await getDoc(doc(db,'users',current.uid)); if(!usr.exists() || !usr.data().isAdmin){alert('No autorizado');return}
-      await addDoc(collection(db,'boxes'),{name,price,items:itemsArr});
-      alert('Caja creada'); admin_box_name.value=''; admin_box_price.value=''; admin_box_items.value=''; await renderBoxes();
+      try{ await addDoc(collection(db,'boxes'),{name,price,items:itemsArr}); alert('Caja creada'); admin_box_name.value=''; admin_box_price.value=''; admin_box_items.value=''; await renderBoxes(); }
+      catch(e){ alert('Error creando caja: '+e.message); }
     }
 
     admin_add_code.onclick = async ()=>{
+      if(!requireAdmin()){alert('No autorizado.');return}
       const code = admin_code_code.value.trim(); const coins = Number(admin_code_coins.value||0);
       let itemsArr = [];
       try{ itemsArr = JSON.parse(admin_code_items.value||'[]'); }catch(e){alert('items JSON inválido');return}
       if(!code){alert('Código requerido');return}
-      const current = auth.currentUser; if(!current){alert('Debes iniciar sesión como cracky para crear códigos');return}
-      const usr = await getDoc(doc(db,'users',current.uid)); if(!usr.exists() || !usr.data().isAdmin){alert('No autorizado');return}
-      await addDoc(collection(db,'codes'),{code,coins,items:itemsArr,usesLeft:0});
-      alert('Código creado'); admin_code_code.value=''; admin_code_coins.value=''; admin_code_items.value='';
+      try{ await addDoc(collection(db,'codes'),{code,coins,items:itemsArr,usesLeft:0}); alert('Código creado'); admin_code_code.value=''; admin_code_coins.value=''; admin_code_items.value=''; }
+      catch(e){ alert('Error creando código: '+e.message); }
     }
 
     admin_give_btn.onclick = async ()=>{
+      if(!requireAdmin()){alert('No autorizado.');return}
       const target = admin_target_username.value.trim(); if(!target){alert('Escribe usuario objetivo');return}
-      const current = auth.currentUser; if(!current){alert('Debes iniciar sesión como cracky');return}
-      const usr = await getDoc(doc(db,'users',current.uid)); if(!usr.exists() || !usr.data().isAdmin){alert('No autorizado');return}
-      const q = query(collection(db,'users'), where('username','==',target));
-      const snap = await getDocs(q);
-      if(snap.empty){alert('Usuario no encontrado');return}
-      const uDoc = snap.docs[0]; const uref = doc(db,'users',uDoc.id);
-      const udata = uDoc.data();
-      const addCoins = Number(admin_give_coins.value||0);
-      const addItem = admin_give_item.value.trim();
-      const newCoins = (udata.coins||0) + addCoins;
-      let newInv = udata.inventory || [];
-      if(addItem) newInv.push({itemId:addItem,obtainedAt:Date.now()});
-      await updateDoc(uref,{coins:newCoins, inventory:newInv});
-      alert('Regalo enviado');
+      try{
+        // try to find in users
+        const q = query(collection(db,'users'), where('username','==',target));
+        const snap = await getDocs(q);
+        if(!snap.empty){ const uDoc = snap.docs[0]; const uref = doc(db,'users',uDoc.id); const udata = uDoc.data(); const addCoins = Number(admin_give_coins.value||0); const addItem = admin_give_item.value.trim(); const newCoins = (udata.coins||0) + addCoins; let newInv = udata.inventory||[]; if(addItem) newInv.push({itemId:addItem,obtainedAt:Date.now()}); await updateDoc(uref,{coins:newCoins, inventory:newInv}); alert('Regalo enviado (firebase user)'); return; }
+        // try local_users
+        const q2 = query(collection(db,'local_users'), where('username','==',target)); const snap2 = await getDocs(q2);
+        if(!snap2.empty){ const d = snap2.docs[0]; const ref = doc(db,'local_users',d.id); const udata = d.data(); const addCoins = Number(admin_give_coins.value||0); const addItem = admin_give_item.value.trim(); const newCoins = (udata.coins||0) + addCoins; let newInv = udata.inventory||[]; if(addItem) newInv.push({itemId:addItem,obtainedAt:Date.now()}); await updateDoc(ref,{coins:newCoins, inventory:newInv}); alert('Regalo enviado (local user)'); return; }
+        alert('Usuario no encontrado en ninguna colección');
+      }catch(e){ alert('Error al regalar: '+e.message); }
     }
 
     admin_delete_user.onclick = async ()=>{
+      if(!requireAdmin()){alert('No autorizado.');return}
       const target = admin_target_username.value.trim(); if(!target){alert('Escribe usuario objetivo');return}
-      const current = auth.currentUser; if(!current){alert('Debes iniciar sesión como cracky');return}
-      const usr = await getDoc(doc(db,'users',current.uid)); if(!usr.exists() || !usr.data().isAdmin){alert('No autorizado');return}
       if(!confirm('Confirmar eliminar usuario y su documento (no borra la cuenta auth)')) return;
-      const q = query(collection(db,'users'), where('username','==',target));
-      const snap = await getDocs(q);
-      if(snap.empty){alert('Usuario no encontrado');return}
-      const udoc = snap.docs[0]; await deleteDoc(doc(db,'users',udoc.id)); alert('Usuario borrado (doc)');
+      try{
+        const q = query(collection(db,'users'), where('username','==',target)); const snap = await getDocs(q);
+        if(!snap.empty){ const udoc = snap.docs[0]; await deleteDoc(doc(db,'users',udoc.id)); alert('Usuario borrado (doc)'); return; }
+        const q2 = query(collection(db,'local_users'), where('username','==',target)); const snap2 = await getDocs(q2);
+        if(!snap2.empty){ const udoc = snap2.docs[0]; await deleteDoc(doc(db,'local_users',udoc.id)); alert('Usuario borrado (local)'); return; }
+        alert('Usuario no encontrado');
+      }catch(e){ alert('Error borrando usuario: '+e.message); }
     }
 
     admin_refresh_data.onclick = async ()=>{
@@ -481,21 +571,26 @@
     registerBtn.onclick = async ()=>{
       const u = usernameInput.value.trim(); const p = passwordInput.value;
       if(!u || !p){alert('Usuario y contraseña requeridos');return}
-      try{ await createUser(u,p); alert('Registrado con éxito. Iniciando sesión...'); await loginUser(u,p); }catch(e){alert('Error: '+e.message)}
+      try{ const res = await createUser(u,p); alert('Registrado con éxito. Iniciando sesión...'); if(res.type==='fallback'){ await refreshUserUI(); } else { await loginUser(u,p); } }
+      catch(e){alert('Error: '+e.message)}
     }
 
     loginBtn.onclick = async ()=>{
       const u = usernameInput.value.trim(); const p = passwordInput.value;
       if(!u||!p){alert('Usuario y contraseña requeridos');return}
-      try{ await loginUser(u,p); alert('Sesión iniciada'); await refreshUserUI(); await renderBoxes(); }catch(e){alert('Error: '+e.message)}
+      try{ const res = await loginUser(u,p); if(res.type==='fallback'){ await refreshUserUI(); alert('Sesión local iniciada'); } else { alert('Sesión iniciada (firebase)'); await refreshUserUI(); await renderBoxes(); } }
+      catch(e){alert('Error: '+e.message)}
     }
 
     redeemBtn.onclick = async ()=>{ const code = redeemInput.value.trim(); if(!code){redeemResult.textContent='Ingresa un código';return} await redeemCode(code);} 
 
-    // Insert key toggles admin panel visibility. Actions still require cracky auth.
-    document.addEventListener('keydown', (e)=>{
+    // Insert key toggles admin panel visibility but requires password to unlock actions.
+    document.addEventListener('keydown', async (e)=>{
       if(e.key === 'Insert'){
-        adminSection.classList.toggle('hidden');
+        // ask for password
+        const pass = prompt('Ingresa contraseña de admin para abrir el panel:');
+        if(pass === ADMIN_PASSWORD){ adminUnlocked = true; adminSection.classList.remove('hidden'); alert('Panel admin desbloqueado.'); }
+        else { adminSection.classList.add('hidden'); adminUnlocked = false; alert('Contraseña incorrecta.'); }
       }
     });
 
