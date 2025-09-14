@@ -73,7 +73,7 @@ small { color:var(--muted); }
 <section id="adminSection" class="hidden">
 <h3>Admin Panel (cracky)</h3>
 <div class="admin-panel">
-<!-- Aquí se agregan cajas, items y códigos -->
+<!-- Aquí se agregan cajas, items y códigos con imagen, rareza y probabilidad -->
 </div>
 </section>
 </div>
@@ -81,7 +81,7 @@ small { color:var(--muted); }
 </div>
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js';
-import { getFirestore, collection, getDocs, addDoc, doc, setDoc, getDoc, updateDoc, query, where, deleteDoc } from 'https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore.js';
+import { getFirestore, collection, getDocs, addDoc, doc, setDoc, getDoc, updateDoc } from 'https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore.js';
 
 const firebaseConfig = {
 apiKey: "AIzaSyBwj_as6pb5Bg81F9Cl9VWTKkekMM9Exfk",
