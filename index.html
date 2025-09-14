@@ -1,567 +1,109 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Abrir Cajas — Juego (1 HTML)</title>
-  <style>
-    :root{--bg:#0f1724;--card:#0b1220;--accent:#7c3aed;--muted:#9aa4b2;--glass:rgba(255,255,255,0.04)}
-    *{box-sizing:border-box;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,'Helvetica Neue',Arial}
-    body{margin:0;background:linear-gradient(180deg,#071024 0%, #0f1724 100%);color:#e6eef8}
-    .container{max-width:1100px;margin:24px auto;padding:24px}
-    header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
-    h1{margin:0;font-size:20px}
-    .row{display:flex;gap:16px}
-    .col{background:var(--card);padding:16px;border-radius:12px;box-shadow:0 6px 20px rgba(2,6,23,0.7)}
-    .left{flex:2;min-width:320px}
-    .right{flex:1;min-width:260px}
-    button{background:var(--accent);border:0;padding:10px 12px;border-radius:10px;color:white;cursor:pointer}
-    input,select,textarea{width:100%;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:var(--glass);color:inherit}
-    .box-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
-    .box-card{padding:12px;border-radius:10px;background:linear-gradient(180deg,rgba(255,255,255,0.02),transparent);display:flex;flex-direction:column;gap:8px}
-    .item-row{display:flex;gap:8px;align-items:center}
-    .item-img{width:72px;height:72px;border-radius:8px;background:#061225;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--muted);overflow:hidden}
-    small{color:var(--muted)}
-    .inventory-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px}
-    .inv-card{background:rgba(255,255,255,0.02);padding:8px;border-radius:8px;text-align:center}
-    .admin-panel{display:flex;flex-direction:column;gap:10px}
-    .hidden{display:none}
-    .topbar{display:flex;gap:8px;align-items:center}
-    .coins{background:rgba(255,255,255,0.03);padding:8px;border-radius:8px}
-    footer{margin-top:24px;text-align:center;color:var(--muted);font-size:12px}
-    label{font-size:13px;color:var(--muted);display:block;margin-bottom:6px}
-    .row-small{display:flex;gap:8px}
-  </style>
-  <!-- Firebase modular SDK (Firestore) -->
-  <script type="module">
-    import { initializeApp } from 'https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js';
-    import { getFirestore, collection, getDocs, addDoc, doc, setDoc, getDoc, updateDoc, query, where, deleteDoc } from 'https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore.js';
-
-    // --- TU FIREBASE CONFIG ---
-    const firebaseConfig = {
-      apiKey: "AIzaSyBwj_as6pb5Bg81F9Cl9VWTKkekMM9Exfk",
-      authDomain: "pekora-forum.firebaseapp.com",
-      projectId: "pekora-forum",
-      storageBucket: "pekora-forum.firebasestorage.app",
-      messagingSenderId: "161910967859",
-      appId: "1:161910967859:web:6a28cecaae74b9b7e9dd46",
-      measurementId: "G-BPBTW5KBRK"
-    };
-
-    const app = initializeApp(firebaseConfig);
-    const db = getFirestore(app);
-
-    // --- Helpers DOM ---
-    const $ = id => document.getElementById(id);
-
-    // UI refs
-    const authSection = $('authSection');
-    const usernameInput = $('username');
-    const passwordInput = $('password');
-    const registerBtn = $('registerBtn');
-    const loginBtn = $('loginBtn');
-    const userCoinsEl = $('userCoins');
-    const authButtons = $('authButtons');
-    const boxesEl = $('boxes');
-    const invUser = $('invUser');
-    const redeemInput = $('redeemCode');
-    const redeemBtn = $('redeemBtn');
-    const redeemResult = $('redeemResult');
-    const adminSection = $('adminSection');
-    const admin_item_name = $('admin_item_name');
-    const admin_item_img = $('admin_item_img');
-    const admin_add_item = $('admin_add_item');
-    const admin_box_name = $('admin_box_name');
-    const admin_box_price = $('admin_box_price');
-    const admin_box_img = $('admin_box_img');
-    const admin_box_items = $('admin_box_items');
-    const admin_add_box = $('admin_add_box');
-    const admin_code_code = $('admin_code_code');
-    const admin_code_coins = $('admin_code_coins');
-    const admin_code_items = $('admin_code_items');
-    const admin_add_code = $('admin_add_code');
-    const admin_target_username = $('admin_target_username');
-    const admin_give_coins = $('admin_give_coins');
-    const admin_give_item = $('admin_give_item');
-    const admin_give_btn = $('admin_give_btn');
-    const admin_delete_user = $('admin_delete_user');
-    const admin_refresh_data = $('admin_refresh_data');
-    const admin_data_dump = $('admin_data_dump');
-
-    // --- Session & admin unlock ---
-    const SESSION_KEY = 'boxgame_user_v1';
-    let currentUser = null; // {type:'fire', uid, username, isAdmin} or {type:'local', id, username}
-    let adminUnlocked = false;
-    const ADMIN_PASSWORD = 'cracky1010';
-
-    // --- Utilities Firestore ---
-    async function fetchCollection(name){
-      const snap = await getDocs(collection(db,name));
-      const arr = []; snap.forEach(d=>arr.push({id:d.id, ...d.data()})); return arr;
-    }
-
-    async function findUserByUsername(username){
-      // users stored in collection 'users' with doc id = uid (we'll use username as doc id to simplify)
-      const ref = doc(db,'users',username);
-      const snap = await getDoc(ref);
-      if(!snap.exists()) return null;
-      return {id: snap.id, ...snap.data()};
-    }
-
-    // --- Registration / Login (Firestore-based) ---
-    async function registerUser(){
-      const username = usernameInput.value.trim();
-      const password = passwordInput.value;
-      if(!username || !password){ alert('Usuario y contraseña requeridos'); return; }
-      // check exists
-      const existing = await findUserByUsername(username);
-      if(existing){ alert('Usuario ya existe'); return; }
-      // create
-      const isAdmin = (username.toLowerCase() === 'cracky');
-      const docRef = doc(db,'users',username);
-      await setDoc(docRef, { username, password, coins:100, inventory:[], isAdmin: !!isAdmin });
-      // set session
-      currentUser = {type:'fire', id: username, username, isAdmin: !!isAdmin};
-      localStorage.setItem(SESSION_KEY, JSON.stringify(currentUser));
-      // hide auth section and refresh UI
-      authSection.classList.add('hidden');
-      await renderBoxes();
-      await refreshUserUI();
-      alert('Registrado: +100 monedas');
-    }
-
-    async function loginUser(){
-      const username = usernameInput.value.trim();
-      const password = passwordInput.value;
-      if(!username || !password){ alert('Usuario y contraseña requeridos'); return; }
-      const u = await findUserByUsername(username);
-      if(!u){ alert('Usuario no encontrado'); return; }
-      if(u.password !== password){ alert('Contraseña incorrecta'); return; }
-      currentUser = {type:'fire', id: username, username, isAdmin: !!u.isAdmin};
-      localStorage.setItem(SESSION_KEY, JSON.stringify(currentUser));
-      authSection.classList.add('hidden');
-      await renderBoxes();
-      await refreshUserUI();
-      alert('Sesión iniciada');
-    }
-
-    function logoutUser(){
-      localStorage.removeItem(SESSION_KEY);
-      currentUser = null;
-      adminUnlocked = false;
-      authSection.classList.remove('hidden');
-      authButtons.innerHTML = `<button onclick="location.reload()">Refrescar</button>`;
-      userCoinsEl.textContent = 'Invitado';
-      invUser.innerHTML = 'Inicia sesión para ver inventario.';
-      adminSection.classList.add('hidden');
-    }
-
-    // Attach auth handlers
-    registerBtn.onclick = registerUser;
-    loginBtn.onclick = loginUser;
-    window.logoutUser = logoutUser;
-
-    // Restore session on load
-    (async ()=>{
-      try{
-        const raw = localStorage.getItem(SESSION_KEY);
-        if(raw){
-          currentUser = JSON.parse(raw);
-        }
-      }catch(e){ currentUser = null; }
-    })();
-
-    // --- Boxes / Items rendering ---
-    async function renderBoxes(){
-      boxesEl.innerHTML = '';
-      const boxes = await fetchCollection('boxes');
-      const items = await fetchCollection('items');
-      // sort by name
-      boxes.sort((a,b)=> (a.name||'').localeCompare(b.name||''));
-      for(const box of boxes){
-        const card = document.createElement('div'); card.className = 'box-card';
-        const imgHtml = box.img ? `<div class="item-img"><img src="${box.img}" style="width:100%;height:100%;object-fit:cover"></div>` : `<div class="item-img">No img</div>`;
-        const title = document.createElement('div'); title.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><strong>${box.name||'Caja'}</strong> <small>$${box.price||0}</small></div>`;
-        card.appendChild(title);
-        const imgWrap = document.createElement('div'); imgWrap.innerHTML = imgHtml; card.appendChild(imgWrap);
-        const list = document.createElement('div'); list.innerHTML = `<small>Items (preview):</small>`;
-        const ul = document.createElement('div'); ul.style.marginTop = '8px';
-        for(const it of (box.items||[]).slice(0,4)){
-          const itemData = items.find(x=>x.id === it.itemId);
-          const itemRow = document.createElement('div'); itemRow.className = 'item-row';
-          const img = document.createElement('div'); img.className = 'item-img';
-          img.innerHTML = itemData ? `<img src="${itemData.img||''}" style="max-width:100%;max-height:100%;border-radius:6px">` : 'No img';
-          const nm = document.createElement('div'); nm.innerHTML = `<div>${itemData ? itemData.name : it.itemId}</div><small>peso:${it.weight||1}</small>`;
-          itemRow.appendChild(img); itemRow.appendChild(nm); ul.appendChild(itemRow);
-        }
-        list.appendChild(ul); card.appendChild(list);
-        const btn = document.createElement('button'); btn.textContent = 'Abrir caja';
-        btn.onclick = ()=> openBox(box.id);
-        card.appendChild(btn);
-        boxesEl.appendChild(card);
-      }
-    }
-
-    // choose by weight helper
-    function chooseItemFromBox(box){
-      const items = box.items || [];
-      if(items.length === 0) return null;
-      const total = items.reduce((s,i)=> s + (i.weight||1), 0);
-      let r = Math.random() * total;
-      for(const it of items){
-        r -= (it.weight||1);
-        if(r <= 0) return it;
-      }
-      return items[items.length-1];
-    }
-
-    // --- Open box (spend coins, give item) ---
-    async function openBox(boxId){
-      if(!currentUser){ alert('Debes iniciar sesión para abrir cajas.'); return; }
-      // load box
-      const boxSnap = await getDoc(doc(db,'boxes',boxId));
-      if(!boxSnap.exists()){ alert('Caja no encontrada'); return; }
-      const box = boxSnap.data();
-      // load user
-      const userRef = doc(db,'users', currentUser.id);
-      const userSnap = await getDoc(userRef);
-      if(!userSnap.exists()){ alert('Usuario inexistente'); return; }
-      const userData = userSnap.data();
-      if((userData.coins||0) < (box.price||0)){ alert('No tienes monedas suficientes'); return; }
-      // deduct
-      await updateDoc(userRef, { coins: (userData.coins||0) - (box.price||0) });
-      // choose item
-      const chosen = chooseItemFromBox(box);
-      if(!chosen){ alert('Caja vacía'); return; }
-      // add to inventory (store only itemId; inventory entries can be simple)
-      const inv = userData.inventory || [];
-      inv.push({ itemId: chosen.itemId, obtainedAt: Date.now() });
-      await updateDoc(userRef, { inventory: inv });
-      // show item name
-      const itemSnap = await getDoc(doc(db,'items', chosen.itemId));
-      const itemName = itemSnap.exists() ? itemSnap.data().name : chosen.itemId;
-      alert('¡Obtuviste: ' + itemName + '!');
-      await refreshUserUI();
-    }
-
-    // --- Refresh user UI: coins, inventory, admin toggle ---
-    async function refreshUserUI(){
-      // show auth buttons or logout
-      if(!currentUser){
-        userCoinsEl.textContent = 'Invitado';
-        authButtons.innerHTML = `<button onclick="location.reload()">Refrescar</button>`;
-        invUser.innerHTML = 'Inicia sesión para ver inventario.';
-        adminSection.classList.add('hidden');
-        return;
-      }
-      // read user doc
-      const uSnap = await getDoc(doc(db,'users', currentUser.id));
-      if(!uSnap.exists()){
-        // session stale
-        logoutUser();
-        return;
-      }
-      const u = uSnap.data();
-      userCoinsEl.textContent = `${u.username} — ${u.coins||0} 💰`;
-      authButtons.innerHTML = `<button id="logoutBtnSmall">Cerrar sesión</button>`;
-      document.getElementById('logoutBtnSmall').onclick = ()=> logoutUser();
-      // inventory render
-      const itemsAll = await fetchCollection('items');
-      invUser.innerHTML = '';
-      const inv = u.inventory || [];
-      if(inv.length === 0) invUser.innerHTML = '<small>Inventario vacío</small>';
-      for(const slot of inv.slice().reverse()){
-        const it = itemsAll.find(i=>i.id === slot.itemId) || { name: slot.itemId, img: '' };
-        const card = document.createElement('div'); card.className = 'inv-card';
-        card.innerHTML = `<div style="height:72px">${ it.img ? `<img src="${it.img}" style="max-width:100%;max-height:100%;border-radius:6px">` : '<div style="font-size:12px;color:var(--muted)">No img</div>' }</div>
-                          <div style="margin-top:6px"><strong>${it.name}</strong></div>`;
-        invUser.appendChild(card);
-      }
-      // show admin panel automatically if user is admin
-      if(u.isAdmin) { adminSection.classList.remove('hidden'); adminUnlocked = true; }
-      else { if(!adminUnlocked) adminSection.classList.add('hidden'); }
-    }
-
-    // Redeem codes
-    async function redeemCode(){
-      const code = redeemInput.value.trim();
-      if(!code){ redeemResult.textContent = 'Ingresa un código'; return; }
-      const q = query(collection(db,'codes'), where('code','==',code));
-      const snap = await getDocs(q);
-      if(snap.empty){ redeemResult.textContent = 'Código inválido'; return; }
-      const docRef = snap.docs[0];
-      const cdata = docRef.data();
-      if(!currentUser){ redeemResult.textContent = 'Debes iniciar sesión para canjear'; return; }
-      const userRef = doc(db,'users', currentUser.id);
-      const userSnap = await getDoc(userRef);
-      const u = userSnap.data();
-      const newCoins = (u.coins||0) + (cdata.coins||0);
-      let newInv = u.inventory || [];
-      if(cdata.items && cdata.items.length>0){ for(const it of cdata.items){ newInv.push({ itemId: it, obtainedAt: Date.now() }); } }
-      await updateDoc(userRef, { coins: newCoins, inventory: newInv });
-      redeemResult.textContent = `Canjeado: +${cdata.coins||0} monedas ${ (cdata.items && cdata.items.length>0) ? ('+ ' + cdata.items.length + ' items') : '' }`;
-      // reduce usesLeft if present and > 0
-      if(cdata.usesLeft && cdata.usesLeft > 0){
-        await updateDoc(doc(db,'codes',docRef.id), { usesLeft: cdata.usesLeft - 1 });
-      }
-      await refreshUserUI();
-    }
-
-    // --- Admin actions (create item, box, code; give; delete) ---
-    async function requireAdminAction(){
-      // allow if logged in and user doc has isAdmin, or if adminUnlocked true
-      if(adminUnlocked){
-        // but still prefer to ensure user doc says admin if logged in
-        if(currentUser){
-          const u = await getDoc(doc(db,'users', currentUser.id));
-          if(u.exists() && u.data().isAdmin) return true;
-        }
-        // if adminUnlocked from password prompt, allow actions (but warn)
-        return true;
-      }
-      // else check logged in admin
-      if(currentUser){
-        const u = await getDoc(doc(db,'users', currentUser.id));
-        if(u.exists() && u.data().isAdmin) return true;
-      }
-      return false;
-    }
-
-    admin_add_item.onclick = async ()=>{
-      if(!await requireAdminAction()){ alert('No autorizado'); return; }
-      const name = admin_item_name.value.trim();
-      const img = admin_item_img.value.trim();
-      if(!name){ alert('Nombre requerido'); return; }
-      await addDoc(collection(db,'items'), { name, img });
-      alert('Item creado');
-      admin_item_name.value = ''; admin_item_img.value = '';
-      await renderBoxes();
-    };
-
-    admin_add_box.onclick = async ()=>{
-      if(!await requireAdminAction()){ alert('No autorizado'); return; }
-      const name = admin_box_name.value.trim();
-      const price = Number(admin_box_price.value || 0);
-      const img = admin_box_img.value.trim();
-      let itemsArr = [];
-      try{ itemsArr = JSON.parse(admin_box_items.value || '[]'); }catch(e){ alert('Items JSON inválido. Usa [{\"itemId\":\"DOCID\",\"weight\":10}, ...]'); return; }
-      if(!name){ alert('Nombre caja requerido'); return; }
-      await addDoc(collection(db,'boxes'), { name, price, img, items: itemsArr });
-      alert('Caja creada');
-      admin_box_name.value=''; admin_box_price.value=''; admin_box_img.value=''; admin_box_items.value='';
-      await renderBoxes();
-    };
-
-    admin_add_code.onclick = async ()=>{
-      if(!await requireAdminAction()){ alert('No autorizado'); return; }
-      const code = admin_code_code.value.trim();
-      const coins = Number(admin_code_coins.value || 0);
-      let itemsArr = [];
-      try{ itemsArr = JSON.parse(admin_code_items.value || '[]'); }catch(e){ alert('Items JSON inválido. Usa [\"itemId1\",\"itemId2\"]'); return; }
-      if(!code){ alert('Código requerido'); return; }
-      await addDoc(collection(db,'codes'), { code, coins, items: itemsArr, usesLeft: 0 });
-      alert('Código creado');
-      admin_code_code.value=''; admin_code_coins.value=''; admin_code_items.value='';
-    };
-
-    admin_give_btn.onclick = async ()=>{
-      if(!await requireAdminAction()){ alert('No autorizado'); return; }
-      const target = admin_target_username.value.trim();
-      if(!target){ alert('Usuario objetivo'); return; }
-      // find user
-      const targetRef = doc(db,'users', target);
-      const tSnap = await getDoc(targetRef);
-      if(!tSnap.exists()){ alert('Usuario no encontrado'); return; }
-      const tdata = tSnap.data();
-      const addCoins = Number(admin_give_coins.value || 0);
-      const addItem = admin_give_item.value.trim();
-      const newCoins = (tdata.coins||0) + addCoins;
-      const newInv = tdata.inventory || [];
-      if(addItem) newInv.push({ itemId: addItem, obtainedAt: Date.now() });
-      await updateDoc(targetRef, { coins: newCoins, inventory: newInv });
-      alert('Regalo enviado');
-      admin_target_username.value=''; admin_give_coins.value=''; admin_give_item.value='';
-    };
-
-    admin_delete_user.onclick = async ()=>{
-      if(!await requireAdminAction()){ alert('No autorizado'); return; }
-      const target = admin_target_username.value.trim();
-      if(!target){ alert('Usuario objetivo'); return; }
-      if(!confirm('Confirmar eliminar usuario (borrará su documento de users).')) return;
-      await deleteDoc(doc(db,'users',target));
-      alert('Usuario borrado');
-      admin_target_username.value='';
-    };
-
-    admin_refresh_data.onclick = async ()=>{
-      admin_data_dump.innerHTML = 'Cargando...';
-      const boxes = await fetchCollection('boxes');
-      const items = await fetchCollection('items');
-      const codesSnap = await fetchCollection('codes');
-      admin_data_dump.innerHTML = `<pre>${JSON.stringify({boxes,items,codes:codesSnap},null,2)}</pre>`;
-      await renderBoxes();
-    };
-
-    // Admin key toggle (Insert) -> asks for password. If correct, sets adminUnlocked true and shows adminSection.
-    document.addEventListener('keydown', async (e)=>{
-      if(e.key === 'Insert'){
-        const pass = prompt('Ingresa contraseña admin (para mostrar panel):');
-        if(pass === ADMIN_PASSWORD){
-          adminUnlocked = true;
-          adminSection.classList.remove('hidden');
-          alert('Panel admin desbloqueado temporalmente.');
-        } else {
-          adminUnlocked = false;
-          adminSection.classList.add('hidden');
-          alert('Contraseña incorrecta.');
-        }
-      }
-    });
-
-    // Attach redeem listener
-    redeemBtn.onclick = redeemCode;
-
-    // Initial render: load boxes, restore session, refresh UI
-    (async ()=>{
-      await renderBoxes();
-      // restore session if present
-      try{
-        const raw = localStorage.getItem(SESSION_KEY);
-        if(raw){
-          currentUser = JSON.parse(raw);
-        }
-      }catch(e){ currentUser = null; }
-      // If logged in, hide auth section
-      if(currentUser){
-        authSection.classList.add('hidden');
-      }
-      await refreshUserUI();
-      // render admin data area button
-      admin_refresh_data.onclick();
-    })();
-
-    // expose some functions to window for inline onclicks
-    window.logoutUser = logoutUser;
-    window.registerUser = registerUser;
-    window.loginUser = loginUser;
-    window.openBox = openBox;
-    window.adminUnlocked = () => adminUnlocked;
-
-  </script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Juego Abrir Cajas</title>
+<style>
+/* Estilo moderno */
+:root { --bg:#0f1724; --card:#0b1220; --accent:#7c3aed; --muted:#9aa4b2; --glass:rgba(255,255,255,0.04); }
+* { box-sizing:border-box; font-family: Inter, system-ui, sans-serif; }
+body { margin:0; background: var(--bg); color:#e6eef8; }
+.container { max-width:1100px; margin:24px auto; padding:24px; }
+header { display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; }
+h1 { margin:0; font-size:20px; }
+.row { display:flex; gap:16px; }
+.col { background:var(--card); padding:16px; border-radius:12px; box-shadow:0 6px 20px rgba(2,6,23,0.7); }
+.left { flex:2; min-width:320px; }
+.right { flex:1; min-width:320px; }
+button { background:var(--accent); border:0; padding:10px 12px; border-radius:10px; color:white; cursor:pointer; }
+input, select, textarea { width:100%; padding:10px; border-radius:8px; border:1px solid rgba(255,255,255,0.06); background:var(--glass); color:inherit; }
+.box-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:12px; }
+.box-card, .inv-card { padding:12px; border-radius:10px; background:linear-gradient(180deg,rgba(255,255,255,0.02),transparent); display:flex; flex-direction:column; gap:8px; }
+.item-img { width:72px; height:72px; border-radius:8px; background:#061225; display:flex; align-items:center; justify-content:center; font-size:12px; color:var(--muted); overflow:hidden; }
+small { color:var(--muted); }
+.inventory-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:10px; }
+.admin-panel { display:flex; flex-direction:column; gap:10px; }
+.hidden { display:none; }
+.topbar { display:flex; gap:8px; align-items:center; }
+.coins { background:rgba(255,255,255,0.03); padding:8px; border-radius:8px; }
+</style>
 </head>
 <body>
-  <div class="container">
-    <header>
-      <h1>Abrir Cajas — Juego</h1>
-      <div class="topbar">
-        <div class="coins" id="userCoins">Invitado</div>
-        <div id="authButtons"></div>
-      </div>
-    </header>
-
-    <div class="row">
-      <div class="col left">
-        <section id="authSection">
-          <h3>Registrarse / Iniciar Sesión</h3>
-          <div style="display:flex;gap:12px">
-            <input id="username" placeholder="Nombre de usuario (ej: cracky)" />
-            <input id="password" placeholder="Contraseña" type="password" />
-            <button id="registerBtn">Registrarse</button>
-            <button id="loginBtn">Iniciar</button>
-          </div>
-          <small style="color:var(--muted)">Al registrarte recibes 100 monedas. Usuario admin: <strong>cracky</strong>.</small>
-        </section>
-
-        <hr style="margin:12px 0;border:none;border-top:1px solid rgba(255,255,255,0.04)" />
-
-        <section>
-          <h3>Cajas Disponibles</h3>
-          <div class="box-list" id="boxes"></div>
-        </section>
-
-        <hr style="margin:12px 0;border:none;border-top:1px solid rgba(255,255,255,0.04)" />
-
-        <section>
-          <h3>Canjear Código</h3>
-          <div style="display:flex;gap:8px">
-            <input id="redeemCode" placeholder="Ingresa código" />
-            <button id="redeemBtn">Canjear</button>
-          </div>
-          <div id="redeemResult"></div>
-        </section>
-
-      </div>
-
-      <div class="col right">
-        <section>
-          <h3>Tu Inventario</h3>
-          <div id="invUser" class="inventory-list"></div>
-        </section>
-
-        <hr style="margin:12px 0;border:none;border-top:1px solid rgba(255,255,255,0.04)" />
-
-        <section id="adminSection" class="hidden">
-          <h3>Admin Panel (cracky)</h3>
-          <div class="admin-panel">
-            <details open>
-              <summary>Agregar Item</summary>
-              <label>Nombre</label>
-              <input id="admin_item_name" placeholder="Nombre item" />
-              <label>URL imagen (aparecerá arriba del nombre)</label>
-              <input id="admin_item_img" placeholder="https://..." />
-              <button id="admin_add_item">Crear Item</button>
-            </details>
-
-            <details>
-              <summary>Agregar Caja</summary>
-              <label>Nombre caja</label>
-              <input id="admin_box_name" placeholder="Nombre caja" />
-              <label>Precio (monedas)</label>
-              <input id="admin_box_price" type="number" placeholder="Precio" />
-              <label>URL imagen de la caja (se mostrará en la tarjeta)</label>
-              <input id="admin_box_img" placeholder="https://..." />
-              <label>Lista de items (JSON):</label>
-              <textarea id="admin_box_items" placeholder='[{"itemId":"ITEM_DOC_ID","weight":10}]'></textarea>
-              <button id="admin_add_box">Crear Caja</button>
-            </details>
-
-            <details>
-              <summary>Agregar Código</summary>
-              <label>Código (texto)</label>
-              <input id="admin_code_code" placeholder="BIENVENIDO100" />
-              <label>Monedas que da</label>
-              <input id="admin_code_coins" type="number" placeholder="100" />
-              <label>Items que da (JSON array de itemIds) ex: [\"itm1\",\"itm2\"]</label>
-              <textarea id="admin_code_items" placeholder='["itemId1","itemId2"]'></textarea>
-              <button id="admin_add_code">Crear Código</button>
-            </details>
-
-            <details>
-              <summary>Operaciones en Usuarios</summary>
-              <label>Usuario objetivo</label><input id="admin_target_username" placeholder="usuario" />
-              <label>Monedas a regalar</label><input id="admin_give_coins" type="number" placeholder="50" />
-              <label>ItemId a regalar</label><input id="admin_give_item" placeholder="itemDocId" />
-              <div style="display:flex;gap:8px;flex-wrap:wrap">
-                <button id="admin_give_btn">Regalar</button>
-                <button id="admin_delete_user">Eliminar usuario</button>
-              </div>
-            </details>
-
-            <details>
-              <summary>Ver Boxes/Items/Códigos (debug)</summary>
-              <button id="admin_refresh_data">Refrescar Datos</button>
-              <div id="admin_data_dump" style="max-height:220px;overflow:auto"></div>
-            </details>
-
-          </div>
-        </section>
-
-      </div>
-    </div>
-
-    <footer>
-      Juego de abrir cajas — todo en 1 HTML. Admin panel: usuario <strong>cracky</strong>. Pulsa <strong>Insert</strong> para abrir el panel (contraseña: <code>cracky1010</code>). Si cracky inicia sesión, el panel se muestra automáticamente.
-    </footer>
-  </div>
+<div class="container">
+<header>
+<h1>Abrir Cajas</h1>
+<div class="topbar">
+<div class="coins" id="userCoins">Invitado</div>
+<div id="authButtons"></div>
+</div>
+</header>
+<div class="row">
+<div class="col left">
+<section id="authSection">
+<h3>Registrarse / Iniciar Sesión</h3>
+<div style="display:flex;gap:12px; flex-wrap:wrap;">
+<input id="username" placeholder="Nombre de usuario" />
+<input id="password" placeholder="Contraseña" type="password" />
+<button id="registerBtn">Registrarse</button>
+<button id="loginBtn">Iniciar</button>
+</div>
+<small>Al registrarte recibes <strong>100 monedas</strong>. Usuario admin: <strong>cracky</strong>.</small>
+</section>
+<hr />
+<section>
+<h3>Cajas Disponibles</h3>
+<div class="box-list" id="boxes"></div>
+</section>
+<hr />
+<section>
+<h3>Canjear Código</h3>
+<div style="display:flex; gap:8px; flex-wrap:wrap;">
+<input id="redeemCode" placeholder="Ingresa código" />
+<button id="redeemBtn">Canjear</button>
+</div>
+<div id="redeemResult"></div>
+</section>
+</div>
+<div class="col right">
+<section>
+<h3>Tu Inventario</h3>
+<div id="invUser" class="inventory-list"></div>
+</section>
+<hr />
+<section id="adminSection" class="hidden">
+<h3>Admin Panel (cracky)</h3>
+<div class="admin-panel">
+<!-- Panel items, cajas y códigos -->
+</div>
+</section>
+</div>
+</div>
+</div>
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js';
+import { getFirestore, collection, getDocs, addDoc, doc, setDoc, getDoc, updateDoc, query, where, deleteDoc } from 'https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore.js';
+const firebaseConfig = {
+apiKey: "AIzaSyBwj_as6pb5Bg81F9Cl9VWTKkekMM9Exfk",
+authDomain: "pekora-forum.firebaseapp.com",
+projectId: "pekora-forum",
+storageBucket: "pekora-forum.firebasestorage.app",
+messagingSenderId: "161910967859",
+appId: "1:161910967859:web:6a28cecaae74b9b7e9dd46",
+measurementId: "G-BPBTW5KBRK"
+};
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const $ = id=>document.getElementById(id);
+let currentUser = null;
+const SESSION_KEY = 'boxgame_user_v1';
+const ADMIN_PASSWORD = 'cracky1010';
+const authSection=$('authSection'),usernameInput=$('username'),passwordInput=$('password'),registerBtn=$('registerBtn'),loginBtn=$('loginBtn'),userCoinsEl=$('userCoins'),authButtons=$('authButtons'),boxesEl=$('boxes'),invUser=$('invUser'),redeemInput=$('redeemCode'),redeemBtn=$('redeemBtn'),redeemResult=$('redeemResult'),adminSection=$('adminSection');
+function logoutUser(){localStorage.removeItem(SESSION_KEY);currentUser=null;authSection.classList.remove('hidden');authButtons.innerHTML='';userCoinsEl.textContent='Invitado';invUser.innerHTML='Inicia sesión para ver inventario.';adminSection.classList.add('hidden');}
+async function findUserByUsername(username){const ref=doc(db,'users',username);const snap=await getDoc(ref);return snap.exists()?{id:snap.id,...snap.data()}:null;}
+registerBtn.onclick=async()=>{const username=usernameInput.value.trim(),password=passwordInput.value;if(!username||!password){alert('Usuario y contraseña requeridos');return;}const exists=await findUserByUsername(username);if(exists){alert('Usuario ya existe');return;}const isAdmin=username.toLowerCase()==='cracky';await setDoc(doc(db,'users',username),{username,password,coins:100,inventory:[],isAdmin});currentUser={id:username,username,isAdmin};localStorage.setItem(SESSION_KEY,JSON.stringify(currentUser));authSection.classList.add('hidden');await refreshUserUI();alert('Registrado con 100 monedas');};
+loginBtn.onclick=async()=>{const username=usernameInput.value.trim(),password=passwordInput.value;if(!username||!password){alert('Usuario y contraseña requeridos');return;}const u=await findUserByUsername(username);if(!u){alert('Usuario no encontrado');return;}if(u.password!==password){alert('Contraseña incorrecta');return;}currentUser={id:username,username,isAdmin:!!u.isAdmin};localStorage.setItem(SESSION_KEY,JSON.stringify(currentUser));authSection.classList.add('hidden');await refreshUserUI();alert('Sesión iniciada');};
+async function refreshUserUI(){if(!currentUser){userCoinsEl.textContent='Invitado';invUser.innerHTML='Inicia sesión para ver inventario.';adminSection.classList.add('hidden');return;}const uSnap=await getDoc(doc(db,'users',currentUser.id));if(!uSnap.exists()){logoutUser();return;}const u=uSnap.data();userCoinsEl.textContent=`${u.username} — ${u.coins||0} 💰`;authButtons.innerHTML=`<button id="logoutBtn">Cerrar sesión</button>`;document.getElementById('logoutBtn').onclick=()=>logoutUser();invUser.innerHTML='';const itemsAll=await getDocs(collection(db,'items'));let inv=u.inventory||[];if(inv.length===0)invUser.innerHTML='<small>Inventario vacío</small>';for(const slot of inv.slice().reverse()){let it=itemsAll.docs.find(i=>i.id===slot.itemId);const card=document.createElement('div');card.className='inv-card';card.innerHTML=`<div style="height:72px">${it?`<img src="${it.data().img}" style="max-width:100%;max-height:100%;border-radius:6px">`:'No img'}</div><div style="margin-top:6px"><strong>${it?it.data().name:slot.itemId}</strong></div>`;invUser.appendChild(card);}if(u.isAdmin){adminSection.classList.remove('hidden');}}window.logoutUser=logoutUser;
+</script>
 </body>
 </html>
