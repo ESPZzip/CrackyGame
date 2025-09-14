@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>CrackyGame - Cases)</title>
+  <title>Abrir Cajas - Juego (Todo en 1 HTML)</title>
   <style>
     :root{--bg:#0f1724;--card:#0b1220;--accent:#7c3aed;--muted:#9aa4b2;--glass:rgba(255,255,255,0.04)}
     *{box-sizing:border-box;font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,'Helvetica Neue',Arial}
@@ -29,6 +29,7 @@
     .topbar{display:flex;gap:8px;align-items:center}
     .coins{background:rgba(255,255,255,0.03);padding:8px;border-radius:8px}
     footer{margin-top:24px;text-align:center;color:var(--muted);font-size:12px}
+    .muted{color:var(--muted)}
   </style>
 </head>
 <body>
@@ -44,14 +45,14 @@
     <div class="row">
       <div class="col left">
         <section id="authSection">
-          <h3>Registrarse / Iniciar Sesión</h3>
+          <h3>Registrarse / Iniciar Sesión (opcional)</h3>
           <div style="display:flex;gap:12px">
             <input id="username" placeholder="Nombre de usuario (ej: cracky)" />
             <input id="password" placeholder="Contraseña" type="password" />
             <button id="registerBtn">Registrarse</button>
             <button id="loginBtn">Iniciar</button>
           </div>
-          <small>Nota: el juego crea una cuenta automática en Firebase usando el nombre de usuario como email (interno). No es necesario un email real.</small>
+          <small class="muted">No es obligatorio — puedes jugar como invitado. Si te registrás, tus monedas e inventario se guardarán en tu cuenta y serán visibles para todos.</small>
         </section>
 
         <hr style="margin:12px 0;border:none;border-top:1px solid rgba(255,255,255,0.04)" />
@@ -83,7 +84,7 @@
         <hr style="margin:12px 0;border:none;border-top:1px solid rgba(255,255,255,0.04)" />
 
         <section id="adminSection" class="hidden">
-          <h3>Admin Panel (cracky)</h3>
+          <h3>Admin Panel (Insert para abrir)</h3>
           <div class="admin-panel">
             <details open>
               <summary>Agregar Item</summary>
@@ -130,7 +131,7 @@
     </div>
 
     <footer>
-      Juego de abrir cajas — hecho en 1 HTML con Firebase. Usuario admin: <strong>cracky</strong> (se asigna automáticamente si ese nombre se registra).
+      Juego de abrir cajas — hecho en 1 HTML con Firebase. Usuario admin: <strong>cracky</strong> (se asigna automáticamente si ese nombre se registra). Presiona la tecla <strong>Insert</strong> para abrir el panel admin (las acciones sensibles aún requieren ser cracky autenticado).
     </footer>
   </div>
 
@@ -203,10 +204,24 @@
     const admin_refresh_data = $('admin_refresh_data');
     const admin_data_dump = $('admin_data_dump');
 
+    // --- Guest system (no registro necesario) ---
+    const GUEST_KEY = 'boxgame_guest_v1';
+    function getGuest(){
+      try{ const raw = localStorage.getItem(GUEST_KEY); if(raw) return JSON.parse(raw); }
+      catch(e){}
+      return null;
+    }
+    function createGuest(){
+      const id = 'guest_' + Math.random().toString(36).slice(2,9);
+      const guest = {id, username:id, coins:100, inventory:[]};
+      localStorage.setItem(GUEST_KEY, JSON.stringify(guest));
+      return guest;
+    }
+    function saveGuest(g){ localStorage.setItem(GUEST_KEY, JSON.stringify(g)); }
+
     // --- Core game logic ---
 
     async function createUser(username, password){
-      // We map username -> fake email so we can use Firebase Auth. This keeps it simple and self-contained.
       const fakeEmail = `${username}@game.local`;
       try{
         const userCred = await createUserWithEmailAndPassword(auth, fakeEmail, password);
@@ -229,6 +244,7 @@
 
     async function logoutUser(){
       await signOut(auth);
+      // When logging out, keep guest data available
     }
 
     async function fetchBoxes(){
@@ -274,42 +290,73 @@
     }
 
     async function openBox(boxId){
+      // Allow both authenticated users and guests
       const user = auth.currentUser;
-      if(!user){alert('Debes iniciar sesión.');return}
-      const userDocRef = doc(db,'users',user.uid);
-      const userSnap = await getDoc(userDocRef);
-      if(!userSnap.exists()){alert('Usuario no existe');return}
-      const userData = userSnap.data();
       const boxSnap = await getDoc(doc(db,'boxes',boxId));
       if(!boxSnap.exists()){alert('Caja no existe');return}
       const box = boxSnap.data();
-      if((userData.coins||0) < (box.price||0)){alert('No tienes monedas suficientes');return}
-      // Deduct
-      await updateDoc(userDocRef,{coins:(userData.coins||0) - (box.price||0)});
-      // Choose item by weight
+
+      if(user){
+        // Authenticated user flow (same as before)
+        const userDocRef = doc(db,'users',user.uid);
+        const userSnap = await getDoc(userDocRef);
+        if(!userSnap.exists()){alert('Usuario no existe');return}
+        const userData = userSnap.data();
+        if((userData.coins||0) < (box.price||0)){alert('No tienes monedas suficientes');return}
+        await updateDoc(userDocRef,{coins:(userData.coins||0) - (box.price||0)});
+        const chosen = chooseItemFromBox(box);
+        const inv = userData.inventory||[]; inv.push({itemId:chosen.itemId,obtainedAt:Date.now()});
+        await updateDoc(userDocRef,{inventory:inv});
+        alert('¡Obtuviste: ' + chosen.itemId + ' !');
+        await refreshUserUI();
+      } else {
+        // Guest flow (localStorage-based)
+        let guest = getGuest(); if(!guest) guest = createGuest();
+        if((guest.coins||0) < (box.price||0)){alert('No tienes monedas suficientes (invitado)');return}
+        guest.coins = (guest.coins||0) - (box.price||0);
+        const chosen = chooseItemFromBox(box);
+        guest.inventory = guest.inventory || [];
+        guest.inventory.push({itemId:chosen.itemId,obtainedAt:Date.now()});
+        saveGuest(guest);
+        alert('Invitado: obtuviste ' + chosen.itemId);
+        await refreshUserUI();
+      }
+    }
+
+    function chooseItemFromBox(box){
       const items = box.items || [];
       const totalWeight = items.reduce((s,i)=>s+(i.weight||1),0);
       let r = Math.random()*totalWeight; let chosen = items[0];
       for(const it of items){ r -= (it.weight||1); if(r<=0){chosen=it;break} }
-      // Add chosen item to user inventory
-      const inv = userData.inventory||[];
-      inv.push({itemId:chosen.itemId,obtainedAt:Date.now()});
-      await updateDoc(userDocRef,{inventory:inv});
-      alert('¡Obtuviste un item!');
-      await refreshUserUI();
+      return chosen;
     }
 
     async function refreshUserUI(){
       const user = auth.currentUser;
+      const itemsAll = await fetchItems();
       if(!user){
-        userCoinsEl.textContent = 'Invitado';
-        invUser.innerHTML='Inicia sesión para ver inventario.';
-        authButtons.innerHTML = `<button onclick="location.reload()">Refrescar</button>`;
+        // show guest
+        let guest = getGuest(); if(!guest) guest = createGuest();
+        userCoinsEl.textContent = `${guest.username} — ${guest.coins||0} 💰 (invitado)`;
+        authButtons.innerHTML = `<button id="becomeUser">Registrarme</button> <button id="refreshBtn">Refrescar</button>`;
+        document.getElementById('becomeUser').onclick = ()=>{ alert('Usá el panel de registro para convertirte en usuario y guardar tu progreso'); };
+        document.getElementById('refreshBtn').onclick = ()=>{ location.reload(); };
+        // Inventory
+        const inv = guest.inventory || [];
+        invUser.innerHTML=''; if(inv.length===0) invUser.innerHTML='<small>Inventario vacío (invitado)</small>';
+        for(const slot of inv.slice().reverse()){
+          const it = itemsAll.find(i=>i.id===slot.itemId) || {name:slot.itemId,img:''};
+          const card = document.createElement('div');card.className='inv-card';
+          card.innerHTML = `<div style="height:60px">${ it.img ? `<img src="${it.img}" style="max-width:100%;max-height:100%;border-radius:6px">` : '<div style="font-size:12px;color:var(--muted)">No img</div>'}</div><div style="margin-top:6px"><strong>${it.name}</strong></div>`;
+          invUser.appendChild(card);
+        }
+        // admin hidden by default; can be opened with Insert (but actions require auth/admin)
         adminSection.classList.add('hidden');
         return;
       }
+      // authenticated
       const snap = await getDoc(doc(db,'users',user.uid));
-      if(!snap.exists())return;
+      if(!snap.exists()) return;
       const data = snap.data();
       userCoinsEl.textContent = `${data.username} — ${data.coins||0} 💰`;
       // Auth buttons
@@ -317,10 +364,8 @@
       document.getElementById('logoutBtn').onclick = async ()=>{ await logoutUser(); location.reload(); };
 
       // Inventory
-      const itemsAll = await fetchItems();
       const inv = data.inventory||[];
-      invUser.innerHTML='';
-      if(inv.length===0) invUser.innerHTML='<small>Inventario vacío</small>';
+      invUser.innerHTML=''; if(inv.length===0) invUser.innerHTML='<small>Inventario vacío</small>';
       for(const slot of inv.slice().reverse()){
         const it = itemsAll.find(i=>i.id===slot.itemId) || {name:'Unknown',img:''};
         const card = document.createElement('div');card.className='inv-card';
@@ -328,35 +373,48 @@
         invUser.appendChild(card);
       }
 
-      // admin toggle
+      // admin toggle: only show automatically if isAdmin
       if(data.isAdmin){ adminSection.classList.remove('hidden'); } else { adminSection.classList.add('hidden'); }
     }
 
-    // --- Codes ---
+    // --- Codes (works for auth users; guests can also redeem but effects are local for guests) ---
     async function redeemCode(codeStr){
-      const user = auth.currentUser; if(!user){redeemResult.textContent='Debes iniciar sesión.';return}
+      const user = auth.currentUser; if(!user){ // guest
+        const q = query(collection(db,'codes'), where('code','==',codeStr));
+        const snap = await getDocs(q);
+        if(snap.empty){redeemResult.textContent='Código inválido';return}
+        const docRef = snap.docs[0]; const cdata = docRef.data();
+        let guest = getGuest(); if(!guest) guest = createGuest();
+        guest.coins = (guest.coins||0) + (cdata.coins||0);
+        guest.inventory = guest.inventory || [];
+        if(cdata.items && cdata.items.length>0){ for(const it of cdata.items){ guest.inventory.push({itemId:it,obtainedAt:Date.now()}); } }
+        saveGuest(guest); redeemResult.textContent = `Canjeado (invitado): +${cdata.coins||0} monedas`;
+        await refreshUserUI();
+        return;
+      }
+      // authenticated
       const q = query(collection(db,'codes'), where('code','==',codeStr));
       const snap = await getDocs(q);
       if(snap.empty){redeemResult.textContent='Código inválido';return}
       const docRef = snap.docs[0];
       const cdata = docRef.data();
       const userRef = doc(db,'users',user.uid); const userSnap = await getDoc(userRef); const u = userSnap.data();
-      // Apply coins
       const giveCoins = cdata.coins||0;
       const newCoins = (u.coins||0) + giveCoins;
       let newInv = u.inventory || [];
       if(cdata.items && cdata.items.length>0){ for(const it of cdata.items){ newInv.push({itemId:it, obtainedAt:Date.now()}); } }
       await updateDoc(userRef,{coins:newCoins, inventory:newInv});
       redeemResult.textContent = `Canjeado: +${giveCoins} monedas ${ (cdata.items && cdata.items.length>0) ? ('+ '+cdata.items.length+' items') : '' }`;
-      // Optionally reduce usesLeft
       if(cdata.usesLeft && cdata.usesLeft>0){ await updateDoc(doc(db,'codes',docRef.id),{usesLeft:cdata.usesLeft-1}); }
       await refreshUserUI();
     }
 
-    // --- Admin actions ---
+    // --- Admin actions (still require authenticated cracky) ---
     admin_add_item.onclick = async ()=>{
       const name = admin_item_name.value.trim(); const img = admin_item_img.value.trim();
       if(!name){alert('Nombre requerido');return}
+      const current = auth.currentUser; if(!current){alert('Debes iniciar sesión como cracky para crear items');return}
+      const usr = await getDoc(doc(db,'users',current.uid)); if(!usr.exists() || !usr.data().isAdmin){alert('No autorizado');return}
       await addDoc(collection(db,'items'),{name,img});
       alert('Item creado'); admin_item_name.value=''; admin_item_img.value='';
     }
@@ -365,6 +423,8 @@
       const name = admin_box_name.value.trim(); const price = Number(admin_box_price.value||0);
       let itemsArr = [];
       try{ itemsArr = JSON.parse(admin_box_items.value||'[]'); }catch(e){alert('items JSON inválido');return}
+      const current = auth.currentUser; if(!current){alert('Debes iniciar sesión como cracky para crear cajas');return}
+      const usr = await getDoc(doc(db,'users',current.uid)); if(!usr.exists() || !usr.data().isAdmin){alert('No autorizado');return}
       await addDoc(collection(db,'boxes'),{name,price,items:itemsArr});
       alert('Caja creada'); admin_box_name.value=''; admin_box_price.value=''; admin_box_items.value=''; await renderBoxes();
     }
@@ -374,13 +434,16 @@
       let itemsArr = [];
       try{ itemsArr = JSON.parse(admin_code_items.value||'[]'); }catch(e){alert('items JSON inválido');return}
       if(!code){alert('Código requerido');return}
+      const current = auth.currentUser; if(!current){alert('Debes iniciar sesión como cracky para crear códigos');return}
+      const usr = await getDoc(doc(db,'users',current.uid)); if(!usr.exists() || !usr.data().isAdmin){alert('No autorizado');return}
       await addDoc(collection(db,'codes'),{code,coins,items:itemsArr,usesLeft:0});
       alert('Código creado'); admin_code_code.value=''; admin_code_coins.value=''; admin_code_items.value='';
     }
 
     admin_give_btn.onclick = async ()=>{
       const target = admin_target_username.value.trim(); if(!target){alert('Escribe usuario objetivo');return}
-      // find user by username
+      const current = auth.currentUser; if(!current){alert('Debes iniciar sesión como cracky');return}
+      const usr = await getDoc(doc(db,'users',current.uid)); if(!usr.exists() || !usr.data().isAdmin){alert('No autorizado');return}
       const q = query(collection(db,'users'), where('username','==',target));
       const snap = await getDocs(q);
       if(snap.empty){alert('Usuario no encontrado');return}
@@ -397,6 +460,8 @@
 
     admin_delete_user.onclick = async ()=>{
       const target = admin_target_username.value.trim(); if(!target){alert('Escribe usuario objetivo');return}
+      const current = auth.currentUser; if(!current){alert('Debes iniciar sesión como cracky');return}
+      const usr = await getDoc(doc(db,'users',current.uid)); if(!usr.exists() || !usr.data().isAdmin){alert('No autorizado');return}
       if(!confirm('Confirmar eliminar usuario y su documento (no borra la cuenta auth)')) return;
       const q = query(collection(db,'users'), where('username','==',target));
       const snap = await getDocs(q);
@@ -426,6 +491,13 @@
     }
 
     redeemBtn.onclick = async ()=>{ const code = redeemInput.value.trim(); if(!code){redeemResult.textContent='Ingresa un código';return} await redeemCode(code);} 
+
+    // Insert key toggles admin panel visibility. Actions still require cracky auth.
+    document.addEventListener('keydown', (e)=>{
+      if(e.key === 'Insert'){
+        adminSection.classList.toggle('hidden');
+      }
+    });
 
     // Auth state
     onAuthStateChanged(auth, async (user)=>{
